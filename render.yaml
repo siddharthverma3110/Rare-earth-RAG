@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: rare-earths-rag
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-4o
+      - key: OPENAI_REASONING_EFFORT
+        value: none
+      - key: RATE_LIMIT_PER_HOUR
+        value: "30"
+      - key: DAILY_REQUEST_CAP
+        value: "500"

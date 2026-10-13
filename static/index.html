@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Rare Earths Assistant</title>
+<meta name="description" content="Ask questions about rare earth elements, answered from a curated library of documents and datasets.">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="tile" aria-hidden="true"><i>60</i><b>Nd</b></div>
+    <div class="titles"><h1>Rare Earths Assistant</h1><p>Answers drawn from our documents and datasets</p></div>
+    <button id="clear" class="ghost" type="button">New chat</button>
+  </header>
+
+  <main id="log" aria-live="polite"></main>
+
+  <form id="form">
+    <textarea id="input" rows="1" maxlength="4000" placeholder="Ask about rare earths" aria-label="Your question"></textarea>
+    <button id="send" type="submit">Send</button>
+  </form>
+  <p class="foot">Responses are generated from the knowledge base and can still contain mistakes. Check the sources.</p>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>
