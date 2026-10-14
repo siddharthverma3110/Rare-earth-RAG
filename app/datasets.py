@@ -11,13 +11,21 @@ DS_DIR = Path(__file__).resolve().parent.parent / "data" / "datasets"
 MAX_ROWS = 60
 
 
+def _read_text(path: Path) -> str:
+    """Read a CSV as UTF-8 (with or without BOM); fall back to Windows-1252 (common for Excel/government exports)."""
+    raw = path.read_bytes()
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return raw.decode("cp1252")
+
+
 def _load():
     desc_file = DS_DIR / "descriptions.json"
     descs = json.loads(desc_file.read_text()) if desc_file.exists() else {}
     out = {}
     for p in sorted(DS_DIR.glob("*.csv")):
-        with p.open(newline="", encoding="utf-8") as f:
-            rows = list(csv.DictReader(f))
+        rows = list(csv.DictReader(_read_text(p).splitlines()))
         out[p.stem] = {"description": descs.get(p.stem, ""), "rows": rows,
                        "columns": list(rows[0].keys()) if rows else []}
     return out
