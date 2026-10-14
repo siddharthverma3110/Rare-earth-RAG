@@ -66,3 +66,13 @@ textarea{flex:1;resize:none;max-height:150px;border:1px solid var(--line);backgr
 #tip strong{display:block;font-weight:600}
 #tip span{display:block;opacity:.7;font-size:12px;margin-bottom:4px}
 #tip p{margin:0;opacity:.92;display:-webkit-box;-webkit-line-clamp:6;-webkit-box-orient:vertical;overflow:hidden}
+
+.chart{margin:10px 0 0;width:100%;max-width:640px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+.chartbox{position:relative;height:300px}
+.chart figcaption{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:8px;font-size:12.5px;color:var(--muted)}
+.ghost.small{padding:2px 9px;font-size:12px}
+.chart details{margin-top:6px;font-size:13px;color:var(--muted)}
+.tablewrap{overflow-x:auto;margin-top:6px}
+.tablewrap table{border-collapse:collapse;font-size:12.5px;color:var(--ink);min-width:100%}
+.tablewrap th,.tablewrap td{padding:4px 10px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+.tablewrap thead th{font-weight:600}.tablewrap tbody th{text-align:left;font-weight:500}

@@ -8,7 +8,6 @@ Browser (static/)  ->  FastAPI (/api/chat)  ->  OpenAI (function calling)
                                 |-> app/rag.py       search PDFs/MD/TXT in data/documents
                                 |-> app/datasets.py  query CSVs in data/datasets
 ```
-Link: https://rare-earths-rag.onrender.com
 
 ## 1. Add your data
 - Put documents (`.pdf`, `.md`, `.txt`) in `data/documents/`.
@@ -58,6 +57,13 @@ In your host's dashboard, add the domain, then create the CNAME record they show
 - `RATE_LIMIT_PER_HOUR` (per IP) and `DAILY_REQUEST_CAP` (global) are enforced in `app/main.py`.
   They are in-memory, so use Redis if you run more than one instance.
 - Optional: put Cloudflare in front for bot protection, or add a login before `/api/chat`.
+
+## Charts
+Ask for a graph or a comparison ("compare dysprosium and terbium prices") and the model calls `create_chart`.
+The server builds the series straight from your CSV (the model never types the numbers), checks that all rows share one
+unit, and the browser draws a line or bar chart with Chart.js (loaded from jsDelivr, pinned to 4.4.7). Charts have hover
+tooltips, a "View data" table, and a "Save image" button. To self-host Chart.js, download it into `static/` and change the
+script tag in `static/index.html`.
 
 ## Choosing the model
 Set `OPENAI_MODEL` (default `gpt-4o`). Reasoning models such as `gpt-6-luna` don't allow function tools on the

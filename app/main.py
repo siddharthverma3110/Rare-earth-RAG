@@ -37,6 +37,7 @@ SYSTEM = (
     "such as S1. Put the tag(s) in square brackets immediately after each sentence or claim they support, "
     "e.g. 'Nd and Pr are used in NdFeB magnets [S1].' Use several tags like [S1][S3] when needed. Only use "
     "tags that tools returned, and never write a separate reference list or source names in the text. "
+    "When the user asks for a graph, chart or plot, or to compare numbers over time or across items, call create_chart (it reads the values straight from the dataset, so never type numbers into it) and then write a short 2-3 sentence takeaway with [S#] citations; do not repeat all the numbers in a table. For several items pass lists, e.g. filters={\"Commodity\":[\"Dysprosium\",\"Terbium\"],\"Statistics\":\"Price\"}, x=\"Year\", series_by=\"Commodity\". Only chart values that share one unit; say so if units differ. "
     "If a lookup returns an error or no rows, do NOT conclude the data is missing: read the error or hint, fix column names, loosen or drop filters (try Commodity only, or the 'contains' option such as contains='dysprosium price'), and retry at least twice. Only say something is not in the knowledge base after those retries. Never invent specifications (such as purity) that the data does not show; quote the Statistics_detail and Unit exactly. "
     "Be concise and use short Markdown lists when helpful."
 )
@@ -54,6 +55,16 @@ TOOLS = [
         {"type": "object",
          "properties": {"query": {"type": "string"}, "top_k": {"type": "integer", "default": 4}},
          "required": ["query"]}),
+    _fn("create_chart",
+        "Draw a line or bar chart for the user from dataset rows. Values are read directly from the dataset. "
+        "'filters' (values may be lists for any-of), 'x' = column for the x axis (e.g. Year or Country), "
+        "'series_by' = column that splits lines/bars (e.g. Commodity or Country), 'value_column' defaults to Value. "
+        "All plotted rows must share one unit. Returns the plotted values so you can describe them.",
+        {"type": "object",
+         "properties": {"dataset": {"type": "string"}, "filters": {"type": "object"}, "contains": {"type": "string"},
+                        "x": {"type": "string"}, "series_by": {"type": "string"}, "value_column": {"type": "string"},
+                        "chart_type": {"type": "string", "enum": ["line", "bar"]}, "title": {"type": "string"}},
+         "required": ["dataset", "x", "title"]}),
     _fn("list_datasets",
         "List available structured datasets with their columns and descriptions.",
         {"type": "object", "properties": {}}),
@@ -151,7 +162,7 @@ def chat(body: ChatIn, request: Request):
     if body.messages[-1].role != "user":
         raise HTTPException(400, "Last message must be from the user.")
     msgs = [{"role": "system", "content": SYSTEM}] + [m.model_dump() for m in body.messages[-12:]]
-    trace, src, labels = [], {}, {}
+    trace, src, labels, charts = [], {}, {}, []
 
     def label(key, info):
         if key not in labels:
@@ -171,7 +182,22 @@ def chat(body: ChatIn, request: Request):
                     args = json.loads(call.function.arguments or "{}")
                 except json.JSONDecodeError:
                     args = {}
-                out = run_tool(call.function.name, args)
+                if call.function.name == "create_chart":
+                    res = datasets.chart_data(args.get("dataset", ""), args.get("filters"), args.get("x"),
+                                              args.get("series_by"), args.get("value_column") or "Value", args.get("contains"))
+                    if "error" in res:
+                        out = res
+                    else:
+                        ctype = args.get("chart_type") or ("line" if all(re.fullmatch(r"\d{4}", v) for v in res["x"]) else "bar")
+                        lab = label("chart:" + json.dumps(args, sort_keys=True, default=str),
+                                    {"title": "Dataset: " + res["dataset"], "source": res["dataset"] + ".csv", "page": None,
+                                     "excerpt": f"Chart built from {res['rows_used']} rows. Filters: {args.get('filters') or 'none'}."})
+                        charts.append({"type": ctype, "title": args.get("title") or "Chart", "x": res["x"],
+                                       "series": res["series"], "y_label": res["y_label"], "cite": lab})
+                        out = {"status": "Chart is displayed to the user.", "cite": lab, "x": res["x"], "series": res["series"],
+                               "unit": res["y_label"], "non_numeric_values_left_blank": res["skipped"]}
+                else:
+                    out = run_tool(call.function.name, args)
                 if call.function.name == "search_documents" and isinstance(out, list):
                     for c in out:
                         c["cite"] = label(c["id"], {"title": c["title"], "source": c["source"], "page": c["page"],
@@ -188,7 +214,8 @@ def chat(body: ChatIn, request: Request):
         raise HTTPException(502, f"Model error: {getattr(e, 'message', str(e))}")
     answer = (msg.content or "").strip() or "I couldn't produce an answer."
     used = {t.strip() for grp in CITE_RE.findall(answer) for t in grp.split(",")}
-    return {"answer": answer, "sources": {k: v for k, v in src.items() if k in used}, "trace": trace}
+    used |= {c["cite"] for c in charts}
+    return {"answer": answer, "sources": {k: v for k, v in src.items() if k in used}, "charts": charts, "trace": trace}
 
 
 @app.get("/")
