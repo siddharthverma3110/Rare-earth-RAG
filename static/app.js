@@ -11,12 +11,17 @@ const STARTERS = [
 
 function esc(s) { return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 
+const CITE_RE = /\[(S\d+(?:\s*,\s*S\d+)*)\]/g;
+
 // Minimal, safe Markdown: escape first, then apply a few patterns.
-function md(src) {
+function md(src, sources = {}) {
+  const cites = (_, ids) => ids.split(",").map((x) => x.trim()).filter((id) => sources[id]).map((id) =>
+    `<button type="button" class="cite" data-id="${id}" aria-label="Source ${id.slice(1)}: ${esc(sources[id].title)}">${id.slice(1)}</button>`).join("");
   const inline = (t) => esc(t)
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>")
+    .replace(CITE_RE, cites);
   const out = []; let list = null;
   const close = () => { if (list) { out.push(`</${list}>`); list = null; } };
   for (const line of src.split("\n")) {
@@ -49,17 +54,40 @@ function addRow(role, html, cls = "") {
 }
 
 function addMeta(row, data) {
-  const parts = [];
-  if (data.sources?.length) {
-    parts.push(`<div class="srcs">${data.sources.map((s) =>
-      `<span class="src">${esc(s.title)}${s.page ? ", p." + s.page : ""}</span>`).join("")}</div>`);
-  }
-  if (data.trace?.length) {
-    parts.push(`<details><summary>${data.trace.length} lookup${data.trace.length > 1 ? "s" : ""} used</summary>${data.trace.map((t) =>
-      `<pre>${esc(t.tool)}(${esc(JSON.stringify(t.input))})\n\n${esc(JSON.stringify(t.output, null, 2).slice(0, 2500))}</pre>`).join("")}</details>`);
-  }
-  if (parts.length) { const m = document.createElement("div"); m.className = "meta"; m.innerHTML = parts.join(""); row.appendChild(m); }
+  if (!data.trace?.length) return;
+  const m = document.createElement("div"); m.className = "meta";
+  m.innerHTML = `<details><summary>${data.trace.length} lookup${data.trace.length > 1 ? "s" : ""} used</summary>${data.trace.map((t) =>
+    `<pre>${esc(t.tool)}(${esc(JSON.stringify(t.input))})\n\n${esc(JSON.stringify(t.output, null, 2).slice(0, 2500))}</pre>`).join("")}</details>`;
+  row.appendChild(m);
 }
+
+// ---- hover / focus / tap tooltip for in-text citations ----
+const tip = document.createElement("div");
+tip.id = "tip"; tip.setAttribute("role", "tooltip"); tip.hidden = true; document.body.appendChild(tip);
+let tipFor = null;
+
+function showTip(el) {
+  const src = el.closest(".bubble")?._sources?.[el.dataset.id];
+  if (!src) return;
+  tipFor = el;
+  const where = [src.page ? "p." + src.page : "", src.source].filter(Boolean).join(" \u00b7 ");
+  tip.innerHTML = `<strong>${esc(src.title)}</strong><span>${esc(where)}</span><p>${esc(src.excerpt || "")}${(src.excerpt || "").length >= 400 ? "\u2026" : ""}</p>`;
+  tip.hidden = false;
+  const r = el.getBoundingClientRect(), t = tip.getBoundingClientRect();
+  const left = Math.max(8, Math.min(r.left + r.width / 2 - t.width / 2, window.innerWidth - t.width - 8));
+  const top = r.top - t.height - 8 >= 8 ? r.top - t.height - 8 : r.bottom + 8;
+  tip.style.left = left + "px"; tip.style.top = top + "px";
+}
+function hideTip() { tip.hidden = true; tipFor = null; }
+const isCite = (e) => e.target.closest?.(".cite");
+log.addEventListener("mouseover", (e) => { const c = isCite(e); if (c) showTip(c); });
+log.addEventListener("mouseout", (e) => { if (isCite(e)) hideTip(); });
+log.addEventListener("focusin", (e) => { const c = isCite(e); if (c) showTip(c); });
+log.addEventListener("focusout", (e) => { if (isCite(e)) hideTip(); });
+log.addEventListener("click", (e) => { const c = isCite(e); if (c) (tipFor === c ? hideTip() : showTip(c)); });
+log.addEventListener("scroll", hideTip);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideTip(); });
+document.addEventListener("click", (e) => { if (!e.target.closest(".cite")) hideTip(); });
 
 async function ask(text) {
   text = text.trim();
@@ -73,9 +101,11 @@ async function ask(text) {
     const res = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages: history }) });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.detail || "Request failed (" + res.status + ")");
-    row.querySelector(".bubble").innerHTML = md(data.answer);
+    const bubble = row.querySelector(".bubble");
+    bubble._sources = data.sources || {};
+    bubble.innerHTML = md(data.answer, bubble._sources);
     addMeta(row, data);
-    history.push({ role: "assistant", content: data.answer });
+    history.push({ role: "assistant", content: data.answer.replace(CITE_RE, "").replace(/ +([.,;:])/g, "$1") });
   } catch (e) {
     history.pop();
     const b = row.querySelector(".bubble"); b.classList.add("error");

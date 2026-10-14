@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import time
 from collections import defaultdict, deque
 
@@ -32,10 +33,16 @@ if origins:
 SYSTEM = (
     "You are a rare earths research assistant. Answer using ONLY information returned by your tools "
     "(search_documents, list_datasets, query_dataset). Call tools before answering factual questions; "
-    "use several calls if needed. Cite document titles and pages for text facts, and name the dataset "
-    "for numbers. If the tools return nothing relevant, say it is not in the knowledge base instead of "
-    "guessing. Be concise and use short Markdown lists when helpful."
+    "use several calls if needed. Every passage or dataset result returned by a tool has a 'cite' tag "
+    "such as S1. Put the tag(s) in square brackets immediately after each sentence or claim they support, "
+    "e.g. 'Nd and Pr are used in NdFeB magnets [S1].' Use several tags like [S1][S3] when needed. Only use "
+    "tags that tools returned, and never write a separate reference list or source names in the text. "
+    "If the tools return nothing relevant, say it is not in the knowledge base instead of guessing. "
+    "Be concise and use short Markdown lists when helpful."
 )
+
+CITE_RE = re.compile(r"\[(S\d+(?:\s*,\s*S\d+)*)\]")
+
 
 def _fn(name, description, parameters):
     return {"type": "function", "function": {"name": name, "description": description, "parameters": parameters}}
@@ -142,7 +149,14 @@ def chat(body: ChatIn, request: Request):
     if body.messages[-1].role != "user":
         raise HTTPException(400, "Last message must be from the user.")
     msgs = [{"role": "system", "content": SYSTEM}] + [m.model_dump() for m in body.messages[-12:]]
-    trace, sources = [], {}
+    trace, src, labels = [], {}, {}
+
+    def label(key, info):
+        if key not in labels:
+            labels[key] = f"S{len(labels) + 1}"
+            src[labels[key]] = info
+        return labels[key]
+
     try:
         for _ in range(MAX_TOOL_ROUNDS + 1):
             resp = complete(msgs)
@@ -156,15 +170,23 @@ def chat(body: ChatIn, request: Request):
                 except json.JSONDecodeError:
                     args = {}
                 out = run_tool(call.function.name, args)
-                trace.append({"tool": call.function.name, "input": args, "output": out})
                 if call.function.name == "search_documents" and isinstance(out, list):
                     for c in out:
-                        sources[c["id"]] = {"title": c["title"], "source": c["source"], "page": c["page"]}
+                        c["cite"] = label(c["id"], {"title": c["title"], "source": c["source"], "page": c["page"],
+                                                    "excerpt": c["text"][:400]})
+                elif call.function.name == "query_dataset" and isinstance(out, dict) and "rows" in out:
+                    ds = args.get("dataset", "")
+                    preview = "; ".join(", ".join(f"{k}={v}" for k, v in r.items()) for r in out["rows"][:3])
+                    out["cite"] = label("ds:" + ds + json.dumps(args.get("filters"), sort_keys=True),
+                                        {"title": "Dataset: " + ds, "source": ds + ".csv", "page": None,
+                                         "excerpt": (f"Filters: {args.get('filters') or 'none'}. " + preview)[:400]})
+                trace.append({"tool": call.function.name, "input": args, "output": out})
                 msgs.append({"role": "tool", "tool_call_id": call.id, "content": json.dumps(out)})
     except OpenAIError as e:
         raise HTTPException(502, f"Model error: {getattr(e, 'message', str(e))}")
     answer = (msg.content or "").strip() or "I couldn't produce an answer."
-    return {"answer": answer, "sources": list(sources.values()), "trace": trace}
+    used = {t.strip() for grp in CITE_RE.findall(answer) for t in grp.split(",")}
+    return {"answer": answer, "sources": {k: v for k, v in src.items() if k in used}, "trace": trace}
 
 
 @app.get("/")
