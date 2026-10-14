@@ -18,7 +18,7 @@ load_dotenv()
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 RATE_PER_HOUR = int(os.getenv("RATE_LIMIT_PER_HOUR", "30"))
 DAILY_CAP = int(os.getenv("DAILY_REQUEST_CAP", "500"))
-MAX_TOOL_ROUNDS = 5
+MAX_TOOL_ROUNDS = 6
 # Reasoning models (e.g. gpt-6-luna) reject function tools on /v1/chat/completions unless reasoning is off.
 # Set OPENAI_REASONING_EFFORT=none (or low/medium/high where supported). Leave blank for non-reasoning models.
 REASONING_EFFORT = os.getenv("OPENAI_REASONING_EFFORT", "").strip()
@@ -37,7 +37,7 @@ SYSTEM = (
     "such as S1. Put the tag(s) in square brackets immediately after each sentence or claim they support, "
     "e.g. 'Nd and Pr are used in NdFeB magnets [S1].' Use several tags like [S1][S3] when needed. Only use "
     "tags that tools returned, and never write a separate reference list or source names in the text. "
-    "If the tools return nothing relevant, say it is not in the knowledge base instead of guessing. "
+    "If a lookup returns an error or no rows, do NOT conclude the data is missing: read the error or hint, fix column names, loosen or drop filters (try Commodity only, or the 'contains' option such as contains='dysprosium price'), and retry at least twice. Only say something is not in the knowledge base after those retries. Never invent specifications (such as purity) that the data does not show; quote the Statistics_detail and Unit exactly. "
     "Be concise and use short Markdown lists when helpful."
 )
 
@@ -58,9 +58,11 @@ TOOLS = [
         "List available structured datasets with their columns and descriptions.",
         {"type": "object", "properties": {}}),
     _fn("query_dataset",
-        "Fetch rows from a dataset. 'filters' maps column name -> exact value (case-insensitive).",
+        "Fetch rows from a dataset. 'filters' maps column name -> value (case-insensitive; falls back to partial "
+        "matching). 'contains' is space-separated words that must all appear in a row, e.g. 'dysprosium price'. "
+        "Use list_datasets to see column names. Filter on few columns first (e.g. Commodity and Statistics), then narrow.",
         {"type": "object",
-         "properties": {"dataset": {"type": "string"}, "filters": {"type": "object"}},
+         "properties": {"dataset": {"type": "string"}, "filters": {"type": "object"}, "contains": {"type": "string"}},
          "required": ["dataset"]}),
 ]
 
@@ -103,7 +105,7 @@ def run_tool(name: str, args: dict):
     if name == "list_datasets":
         return datasets.list_datasets()
     if name == "query_dataset":
-        return datasets.query(args.get("dataset", ""), args.get("filters"))
+        return datasets.query(args.get("dataset", ""), args.get("filters"), args.get("contains"))
     return {"error": f"Unknown tool {name}"}
 
 
@@ -174,7 +176,7 @@ def chat(body: ChatIn, request: Request):
                     for c in out:
                         c["cite"] = label(c["id"], {"title": c["title"], "source": c["source"], "page": c["page"],
                                                     "excerpt": c["text"][:400]})
-                elif call.function.name == "query_dataset" and isinstance(out, dict) and "rows" in out:
+                elif call.function.name == "query_dataset" and isinstance(out, dict) and out.get("rows"):
                     ds = args.get("dataset", "")
                     preview = "; ".join(", ".join(f"{k}={v}" for k, v in r.items()) for r in out["rows"][:3])
                     out["cite"] = label("ds:" + ds + json.dumps(args.get("filters"), sort_keys=True),
