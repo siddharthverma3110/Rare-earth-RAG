@@ -8,6 +8,7 @@ Browser (static/)  ->  FastAPI (/api/chat)  ->  OpenAI (function calling)
                                 |-> app/rag.py       search PDFs/MD/TXT in data/documents
                                 |-> app/datasets.py  query CSVs in data/datasets
 ```
+Link: https://rare-earths-rag.onrender.com
 
 ## 1. Add your data
 - Put documents (`.pdf`, `.md`, `.txt`) in `data/documents/`.
