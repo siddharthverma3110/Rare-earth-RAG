@@ -58,18 +58,36 @@ TOOLS = [
 ]
 
 
+_effort = REASONING_EFFORT or None  # learned at runtime and remembered for later requests
+
+
 def complete(msgs):
-    """Call the model; if it rejects reasoning_effort with tools, retry once with reasoning off."""
-    kwargs = dict(model=MODEL, messages=msgs, tools=TOOLS, max_completion_tokens=1200)
-    if REASONING_EFFORT:
-        kwargs["reasoning_effort"] = REASONING_EFFORT
-    try:
-        return client.chat.completions.create(**kwargs)
-    except BadRequestError as e:
-        if "reasoning_effort" in str(e) and kwargs.get("reasoning_effort") != "none":
-            kwargs["reasoning_effort"] = "none"
+    """Call the model, adapting `reasoning_effort` to what the model accepts:
+    - rejects function tools while reasoning -> retry with "none"
+    - doesn't recognise the parameter at all -> retry without it
+    The working setting is remembered, so only the first request pays for a retry."""
+    global _effort
+    last = None
+    for _ in range(3):
+        kwargs = dict(model=MODEL, messages=msgs, tools=TOOLS, max_completion_tokens=1200)
+        if _effort:
+            kwargs["reasoning_effort"] = _effort
+        try:
             return client.chat.completions.create(**kwargs)
-        raise
+        except BadRequestError as e:
+            last = e
+            m = str(e).lower()
+            if "reasoning_effort" not in m:
+                raise
+            if "unrecognized" in m or "unknown" in m or "unsupported parameter" in m:
+                if _effort is None:
+                    raise
+                _effort = None
+            elif _effort != "none":
+                _effort = "none"
+            else:
+                raise
+    raise last
 
 
 def run_tool(name: str, args: dict):

@@ -60,8 +60,9 @@ In your host's dashboard, add the domain, then create the CNAME record they show
 
 ## Choosing the model
 Set `OPENAI_MODEL` (default `gpt-4o`). Reasoning models such as `gpt-6-luna` don't allow function tools on the
-Chat Completions API while reasoning is on, so set `OPENAI_REASONING_EFFORT=none`. The app also retries once
-with `none` automatically if the API rejects the setting.
+Chat Completions API while reasoning is on, so set `OPENAI_REASONING_EFFORT=none`. The app also adapts automatically: if the API says
+function tools need reasoning off it retries with `none`, and if the model doesn't recognise
+`reasoning_effort` at all it retries without it. For models like `gpt-4o`, leave the setting blank.
 
 ## Upgrading retrieval
 `app/rag.py` uses TF-IDF, which is fast and light. For semantic search, replace `build_index()` and
