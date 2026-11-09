@@ -1,6 +1,9 @@
+import asyncio
 import json
+import logging
 import os
 import re
+import secrets
 import time
 from collections import defaultdict, deque
 
@@ -8,7 +11,7 @@ from openai import BadRequestError, OpenAI, OpenAIError
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -19,6 +22,11 @@ MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 RATE_PER_HOUR = int(os.getenv("RATE_LIMIT_PER_HOUR", "30"))
 DAILY_CAP = int(os.getenv("DAILY_REQUEST_CAP", "500"))
 MAX_TOOL_ROUNDS = 6
+# Deep research is far more expensive per request than chat, so it has its own, much tighter limits.
+RESEARCH_PER_HOUR = int(os.getenv("RESEARCH_LIMIT_PER_HOUR", "3"))
+RESEARCH_DAILY = int(os.getenv("RESEARCH_DAILY_CAP", "40"))
+RESEARCH_CODE = os.getenv("RESEARCH_ACCESS_CODE", "").strip()  # optional: require a code for deep research
+log = logging.getLogger("app")
 # Reasoning models (e.g. gpt-6-luna) reject function tools on /v1/chat/completions unless reasoning is off.
 # Set OPENAI_REASONING_EFFORT=none (or low/medium/high where supported). Leave blank for non-reasoning models.
 REASONING_EFFORT = os.getenv("OPENAI_REASONING_EFFORT", "").strip()
@@ -120,26 +128,28 @@ def run_tool(name: str, args: dict):
     return {"error": f"Unknown tool {name}"}
 
 
-# ---- simple in-memory rate limiting (use Redis if you run several instances) ----
-_hits = defaultdict(deque)
-_day = {"key": None, "n": 0}
+# ---- simple in-memory rate limiting, one bucket per feature (use Redis if you run several instances) ----
+_buckets = {}
 
 
-def check_limits(request: Request):
+def check_limits(request: Request, bucket: str = "chat", per_hour: int | None = None, daily: int | None = None):
+    per_hour = RATE_PER_HOUR if per_hour is None else per_hour
+    daily = DAILY_CAP if daily is None else daily
+    st = _buckets.setdefault(bucket, {"hits": defaultdict(deque), "day": None, "n": 0})
     ip = (request.headers.get("x-forwarded-for") or request.client.host or "?").split(",")[0].strip()
     now = time.time()
-    q = _hits[ip]
+    q = st["hits"][ip]
     while q and now - q[0] > 3600:
         q.popleft()
-    if len(q) >= RATE_PER_HOUR:
+    if len(q) >= per_hour:
         raise HTTPException(429, "Too many requests. Please try again later.")
     today = time.strftime("%Y-%m-%d")
-    if _day["key"] != today:
-        _day.update(key=today, n=0)
-    if _day["n"] >= DAILY_CAP:
+    if st["day"] != today:
+        st.update(day=today, n=0)
+    if st["n"] >= daily:
         raise HTTPException(429, "Daily capacity reached. Please come back tomorrow.")
     q.append(now)
-    _day["n"] += 1
+    st["n"] += 1
 
 
 class Msg(BaseModel):
@@ -216,6 +226,41 @@ def chat(body: ChatIn, request: Request):
     used = {t.strip() for grp in CITE_RE.findall(answer) for t in grp.split(",")}
     used |= {c["cite"] for c in charts}
     return {"answer": answer, "sources": {k: v for k, v in src.items() if k in used}, "charts": charts, "trace": trace}
+
+
+@app.get("/api/config")
+def config():
+    return {"research_requires_code": bool(RESEARCH_CODE)}
+
+
+class ResearchIn(BaseModel):
+    query: str = Field(min_length=3, max_length=500)
+
+
+_research_slots = asyncio.Semaphore(2)  # max concurrent research runs
+
+
+@app.post("/api/research")
+async def research(body: ResearchIn, request: Request):
+    """Deep research agent (planner -> parallel web / academic / library search -> writer). Streams NDJSON events."""
+    if RESEARCH_CODE and not secrets.compare_digest(request.headers.get("x-access-code", "").encode(), RESEARCH_CODE.encode()):
+        raise HTTPException(401, "A valid access code is required for deep research.")
+    check_limits(request, "research", RESEARCH_PER_HOUR, RESEARCH_DAILY)
+
+    async def stream():
+        if _research_slots.locked():
+            yield json.dumps({"type": "error", "data": "The research agent is busy. Please try again in a minute."}) + "\n"
+            return
+        async with _research_slots:
+            try:
+                from .research.manager import ResearchManager  # imported lazily so chat keeps working if it fails
+                async for kind, payload in ResearchManager().run(body.query):
+                    yield json.dumps({"type": kind, "data": payload}) + "\n"
+            except Exception:
+                log.exception("research failed")
+                yield json.dumps({"type": "error", "data": "Research failed. Please try again."}) + "\n"
+
+    return StreamingResponse(stream(), media_type="application/x-ndjson", headers={"X-Accel-Buffering": "no"})
 
 
 @app.get("/")

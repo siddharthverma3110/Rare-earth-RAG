@@ -4,3 +4,5 @@ openai>=1.50.0
 scikit-learn>=1.5
 pypdf>=5.0
 python-dotenv>=1.0
+openai-agents>=0.2
+httpx>=0.27

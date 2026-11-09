@@ -19,6 +19,7 @@ function md(src, sources = {}) {
     `<button type="button" class="cite" data-id="${id}" aria-label="Source ${id.slice(1)}: ${esc(sources[id].title)}">${id.slice(1)}</button>`).join("");
   const inline = (t) => esc(t)
     .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>")
     .replace(CITE_RE, cites);
@@ -31,7 +32,8 @@ function md(src, sources = {}) {
       if (list !== tag) { close(); out.push(`<${tag}>`); list = tag; }
       out.push(`<li>${inline((ul || ol)[1])}</li>`);
     } else if (line.trim() === "") { close(); }
-    else { close(); out.push(`<p>${inline(line.replace(/^#+\s*/, ""))}</p>`); }
+    else if (/^\s{0,3}#{1,6}\s+/.test(line)) { close(); out.push(`<h4>${inline(line.replace(/^\s*#+\s*/, ""))}</h4>`); }
+    else { close(); out.push(`<p>${inline(line)}</p>`); }
   }
   close();
   return out.join("");
@@ -39,12 +41,23 @@ function md(src, sources = {}) {
 
 function scroll() { log.scrollTop = log.scrollHeight; }
 
+let mode = "chat", needsCode = false;
+const RESEARCH_STARTERS = [
+  "Assess global supply risk for heavy rare earths",
+  "How are rare earth magnets recycled, and what limits scale?",
+  "Compare China's and Australia's rare earth industries",
+];
+
 function hello() {
-  log.innerHTML = `<div class="hello"><h2>What would you like to know about rare earths?</h2>
-    <p>Ask a question and the assistant will search the documents and datasets before answering.</p>
-    <div class="starters">${STARTERS.map((s) => `<button type="button">${esc(s)}</button>`).join("")}</div></div>`;
-  log.querySelectorAll(".starters button").forEach((b) => (b.onclick = () => ask(b.textContent)));
+  const r = mode === "research";
+  log.innerHTML = `<div class="hello"><h2>${r ? "Run a deep research report" : "What would you like to know about rare earths?"}</h2>
+    <p>${r ? "A planner runs web, academic and library searches in parallel, then writes a cited report. It takes a few minutes."
+           : "Ask a question and the assistant will search the documents and datasets before answering."}</p>
+    <div class="starters">${(r ? RESEARCH_STARTERS : STARTERS).map((s) => `<button type="button">${esc(s)}</button>`).join("")}</div></div>`;
+  log.querySelectorAll(".starters button").forEach((b) => (b.onclick = () => run(b.textContent)));
 }
+const clearHello = () => log.querySelector(".hello")?.remove();
+const run = (t) => (mode === "research" ? research(t) : ask(t));
 
 function addRow(role, html, cls = "") {
   const row = document.createElement("div");
@@ -108,6 +121,7 @@ function addChart(row, spec, sources) {
   if (!window.Chart) { fig.querySelector(".chartbox").remove(); fig.querySelector("figcaption button.small").remove(); fig.querySelector("details").open = true; return; }
 
   const css = getComputedStyle(document.documentElement), v = (n) => css.getPropertyValue(n).trim();
+  Chart.defaults.font.family = v("--font");
   const dark = matchMedia("(prefers-color-scheme: dark)").matches, pal = dark ? PALETTE_DARK : PALETTE_LIGHT;
   const isBar = spec.type === "bar";
   const chart = new Chart(fig.querySelector("canvas"), {
@@ -140,7 +154,7 @@ function addChart(row, spec, sources) {
 async function ask(text) {
   text = text.trim();
   if (!text || busy) return;
-  if (!history.length) log.innerHTML = "";
+  clearHello();
   busy = true; send.disabled = true; input.value = ""; input.style.height = "auto";
   addRow("user", esc(text));
   history.push({ role: "user", content: text });
@@ -163,8 +177,140 @@ async function ask(text) {
   busy = false; send.disabled = false; input.focus(); scroll();
 }
 
-$("form").onsubmit = (e) => { e.preventDefault(); ask(input.value); };
-input.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(input.value); } };
+// ---- deep research mode ----
+const safeUrl = (u) => { try { const x = new URL(u); return /^https?:$/.test(x.protocol) ? x.href : ""; } catch { return ""; } };
+const hostOf = (u) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return ""; } };
+const srcLabel = (s) => s.kind === "doc" ? "Knowledge base" : s.kind === "paper"
+  ? [s.authors, s.year, s.venue].filter(Boolean).join(", ") : hostOf(s.url);
+
+function setMode(m) {
+  mode = m;
+  const r = m === "research";
+  $("mode-chat").setAttribute("aria-selected", String(!r));
+  $("mode-research").setAttribute("aria-selected", String(r));
+  input.placeholder = r ? "Describe a topic to research in depth" : "Ask about rare earths";
+  send.textContent = r ? "Research" : "Send";
+  $("code").hidden = !(r && needsCode);
+  $("modehint").textContent = r ? "Slower and uses more of the daily allowance: about 1\u20133 minutes per report." : "";
+  $("modehint").classList.remove("warn");
+  if (log.querySelector(".hello")) hello();
+  input.focus();
+}
+
+const STEPS = ["Planning searches", "Searching the web, papers and your library", "Writing the report"];
+const progressHTML = () => `<ol class="steps">${STEPS.map((t, i) =>
+  `<li class="step ${i === 0 ? "active" : "pending"}"><span class="dot">${i + 1}</span><div><b>${t}</b><small></small></div></li>`).join("")}</ol>
+  <p class="slow">This usually takes 1\u20133 minutes. You can keep this tab open while it works.</p>`;
+
+function setStep(bubble, n, detail) {
+  bubble.querySelectorAll(".step").forEach((li, i) => {
+    li.className = "step " + (i + 1 < n ? "done" : i + 1 === n ? "active" : "pending");
+    li.querySelector(".dot").textContent = i + 1 < n ? "\u2713" : i + 1;
+    if (i + 1 === n && detail) li.querySelector("small").textContent = detail;
+  });
+}
+
+function reportMarkdown(data) {
+  const refs = data.sources.map((s) => `${s.n}. ${s.title}${s.url && !s.url.startsWith("kb://") ? " - " + s.url : ""} (${srcLabel(s)})`).join("\n");
+  return data.markdown + "\n\n## Sources\n" + refs + "\n";
+}
+
+function renderReport(row, data) {
+  const bubble = row.querySelector(".bubble");
+  const sources = {};
+  data.sources.forEach((s) => (sources["S" + s.n] = { title: s.title, source: srcLabel(s), page: null, excerpt: s.snippet || "" }));
+  row._sources = sources;
+  bubble.className = "bubble report";
+  bubble.innerHTML = md(data.markdown.replace(/\[(\d+)\](?!\()/g, "[S$1]"), sources);
+
+  const groups = [["doc", "Knowledge base"], ["web", "Web sources"], ["paper", "Academic papers"]];
+  const refs = document.createElement("div"); refs.className = "refs";
+  let html = "";
+  groups.forEach(([kind, label]) => {
+    const list = data.sources.filter((s) => s.kind === kind);
+    if (!list.length) return;
+    html += `<h4>${label}</h4><ol>${list.map((s) => {
+      const u = kind === "doc" ? "" : safeUrl(s.url);
+      return `<li value="${s.n}"><span class="n">[${s.n}]</span><div>${u ? `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(s.title)}</a>` : esc(s.title)}<span class="m">${esc(srcLabel(s))}</span></div></li>`;
+    }).join("")}</ol>`;
+  });
+  refs.innerHTML = html || "<p class='m'>No sources were cited.</p>";
+  bubble.appendChild(refs);
+
+  const words = data.markdown.split(/\s+/).filter(Boolean).length;
+  const bar = document.createElement("div"); bar.className = "meta actions";
+  bar.innerHTML = `<span>${words.toLocaleString()} words \u00b7 ${data.sources.length} sources</span>
+    <span class="grow"></span><button type="button" class="ghost small" data-a="copy">Copy</button>
+    <button type="button" class="ghost small" data-a="dl">Download .md</button>`;
+  bar.querySelector('[data-a="copy"]').onclick = async (e) => {
+    try { await navigator.clipboard.writeText(reportMarkdown(data)); e.target.textContent = "Copied"; } catch { e.target.textContent = "Copy failed"; }
+    setTimeout(() => (e.target.textContent = "Copy"), 1600);
+  };
+  bar.querySelector('[data-a="dl"]').onclick = () => {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([reportMarkdown(data)], { type: "text/markdown" }));
+    a.download = "rare-earths-research-report.md"; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  };
+  row.appendChild(bar);
+
+  if (data.follow_ups?.length) {
+    const f = document.createElement("div"); f.className = "followups";
+    f.innerHTML = `<span>Research next:</span>` + data.follow_ups.map((q) => `<button type="button" class="chip">${esc(q)}</button>`).join("");
+    f.querySelectorAll("button").forEach((b) => (b.onclick = () => { setMode("research"); input.value = b.textContent; input.oninput(); input.focus(); }));
+    row.appendChild(f);
+  }
+  scroll();
+}
+
+async function research(text) {
+  text = text.trim();
+  if (text.length < 3 || busy) return;
+  const code = $("code").value.trim();
+  if (needsCode && !code) { const h = $("modehint"); h.textContent = "Enter the access code to use deep research."; h.classList.add("warn"); $("code").focus(); return; }
+  clearHello();
+  busy = true; send.disabled = true; input.value = ""; input.style.height = "auto";
+  addRow("user", esc(text));
+  const row = addRow("bot", progressHTML()); row.classList.add("research");
+  const bubble = row.querySelector(".bubble");
+  const fail = (msg) => { bubble.className = "bubble error"; bubble.textContent = msg + " Please try again."; };
+  let finished = false;
+  try {
+    const res = await fetch("/api/research", { method: "POST", headers: { "Content-Type": "application/json", "X-Access-Code": code }, body: JSON.stringify({ query: text }) });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(typeof d.detail === "string" ? d.detail : res.status === 422 ? "Please enter a topic of 3 to 500 characters." : "Request failed (" + res.status + ").");
+    }
+    const reader = res.body.getReader(), dec = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split("\n"); buf = lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let m; try { m = JSON.parse(line); } catch { continue; }
+        if (m.type === "status") {
+          const t = m.data;
+          if (t.startsWith("Planning")) setStep(bubble, 1);
+          else if (t.startsWith("Planned")) { const x = t.match(/\((\d+) web, (\d+) academic, (\d+) library\)/); setStep(bubble, 2, x ? `${x[1]} web, ${x[2]} academic and ${x[3]} library searches in parallel` : ""); }
+          else if (t.startsWith("Searches complete")) setStep(bubble, 3);
+        } else if (m.type === "error") { finished = true; fail(m.data); }
+        else if (m.type === "report") { finished = true; renderReport(row, m.data); }
+      }
+    }
+    if (!finished) fail("The connection ended before the report was finished.");
+  } catch (e) { fail(e.message); }
+  busy = false; send.disabled = false; input.focus(); scroll();
+}
+
+$("form").onsubmit = (e) => { e.preventDefault(); run(input.value); };
+input.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); run(input.value); } };
 input.oninput = () => { input.style.height = "auto"; input.style.height = input.scrollHeight + "px"; };
 $("clear").onclick = () => { history = []; hello(); };
+$("mode-chat").onclick = () => setMode("chat");
+$("mode-research").onclick = () => setMode("research");
+try { $("code").value = sessionStorage.getItem("rc") || ""; } catch {}
+$("code").oninput = () => { try { sessionStorage.setItem("rc", $("code").value); } catch {} $("modehint").classList.remove("warn"); };
+fetch("/api/config").then((r) => r.json()).then((c) => { needsCode = !!c.research_requires_code; setMode(mode); }).catch(() => {});
 hello();

@@ -58,6 +58,17 @@ In your host's dashboard, add the domain, then create the CNAME record they show
   They are in-memory, so use Redis if you run more than one instance.
 - Optional: put Cloudflare in front for bot protection, or add a login before `/api/chat`.
 
+## Deep research mode
+Switch to **Deep research** under the chat. A planner (from [Deep-research-agent-v1](https://github.com/siddharthverma3110/Deep-research-agent-v1))
+runs searches in parallel across three sources: your document library (`data/documents`), the web (OpenAI hosted web
+search) and academic papers (OpenAlex). A writer then produces a cited report with a numbered source list; hovering over a
+citation shows the source. Code lives in `app/research/`; the endpoint is `POST /api/research` (streams progress as NDJSON).
+
+Setup: `pip install -r requirements.txt` adds `openai-agents` and `httpx`. Get a free OpenAlex key at
+https://openalex.org/settings/api and set `OPENALEX_API_KEY` (without it the academic section is empty). Research costs
+far more than a chat message, so it has its own limits (`RESEARCH_LIMIT_PER_HOUR`, `RESEARCH_DAILY_CAP`) and an optional
+`RESEARCH_ACCESS_CODE` that visitors must enter. Datasets (CSV) are used by chat and charts but not by the research agent yet.
+
 ## Charts
 Ask for a graph or a comparison ("compare dysprosium and terbium prices") and the model calls `create_chart`.
 The server builds the series straight from your CSV (the model never types the numbers), checks that all rows share one
