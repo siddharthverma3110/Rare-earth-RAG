@@ -242,7 +242,7 @@ _research_slots = asyncio.Semaphore(2)  # max concurrent research runs
 
 @app.post("/api/research")
 async def research(body: ResearchIn, request: Request):
-    """Deep research agent (planner -> parallel web / academic / library search -> writer). Streams NDJSON events."""
+    """Deep research agent (planner -> parallel web + OpenAlex academic search -> writer). Streams NDJSON events."""
     if RESEARCH_CODE and not secrets.compare_digest(request.headers.get("x-access-code", "").encode(), RESEARCH_CODE.encode()):
         raise HTTPException(401, "A valid access code is required for deep research.")
     check_limits(request, "research", RESEARCH_PER_HOUR, RESEARCH_DAILY)
