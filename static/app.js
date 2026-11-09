@@ -197,7 +197,7 @@ function setMode(m) {
   input.focus();
 }
 
-const STEPS = ["Planning searches", "Searching the web, papers and your library", "Writing the report"];
+const STEPS = ["Planning searches", "Searching the web and academic papers", "Writing the report"];
 const progressHTML = () => `<ol class="steps">${STEPS.map((t, i) =>
   `<li class="step ${i === 0 ? "active" : "pending"}"><span class="dot">${i + 1}</span><div><b>${t}</b><small></small></div></li>`).join("")}</ol>
   <p class="slow">This usually takes 1\u20133 minutes. You can keep this tab open while it works.</p>`;
